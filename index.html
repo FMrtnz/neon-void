@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0420">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Neon Void</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root { --cyan:#00f0ff; --violet:#9b5cff; --magenta:#ff2bd6; }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+html, body { margin:0; height:100%; overflow:hidden; overscroll-behavior:none; touch-action:none;
+  background:radial-gradient(ellipse at 50% 120%, #2a0a4a 0%, #0a0420 50%, #02010a 100%);
+  font-family:"Trebuchet MS", Verdana, sans-serif; color:#fff; }
+canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+.hidden { display:none !important; }
+
+/* Full-screen menus */
+.screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; background:rgba(5,1,15,.72); text-align:center; padding:20px; }
+h1 { font-size:clamp(40px,11vw,76px); margin:0; letter-spacing:6px; color:var(--cyan);
+  text-shadow:0 0 10px var(--cyan), 0 0 30px var(--cyan); }
+h1 em { font-style:normal; color:var(--magenta); text-shadow:0 0 10px var(--magenta), 0 0 30px var(--magenta); }
+h2 { margin:0; font-size:clamp(30px,8vw,52px); letter-spacing:4px; color:var(--magenta); text-shadow:0 0 14px var(--magenta); }
+p { margin:0; color:#c9b8ff; line-height:1.5; max-width:420px; }
+.big { font-size:clamp(34px,9vw,56px); color:var(--cyan); text-shadow:0 0 14px var(--cyan); font-weight:700; }
+
+button { font:inherit; font-weight:700; letter-spacing:3px; color:var(--cyan); background:transparent;
+  border:2px solid var(--cyan); border-radius:10px; padding:13px 28px; min-width:240px; cursor:pointer;
+  box-shadow:0 0 12px rgba(0,240,255,.6), inset 0 0 12px rgba(0,240,255,.2); transition:transform .1s, background .15s; }
+button:hover, button:focus-visible { background:rgba(0,240,255,.16); transform:scale(1.04); outline:none; }
+button.alt { color:var(--violet); border-color:var(--violet); box-shadow:0 0 12px rgba(155,92,255,.6), inset 0 0 12px rgba(155,92,255,.2); }
+button.alt:hover { background:rgba(155,92,255,.16); }
+
+#pauseBtn { position:fixed; top:calc(8px + env(safe-area-inset-top)); right:8px; min-width:0; padding:8px 14px; letter-spacing:0; }
+#install { position:fixed; left:10px; right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); display:flex; gap:10px;
+  align-items:center; justify-content:center; padding:10px; background:rgba(10,4,32,.92); border:1px solid var(--violet);
+  border-radius:12px; font-size:14px; z-index:5; }
+#install button { min-width:0; padding:6px 14px; letter-spacing:1px; }
+kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:#fff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="pauseBtn" class="hidden" aria-label="Pause">❚❚</button>
+
+<!-- Install message (shown only when the browser says the app can be installed) -->
+<div id="install" class="hidden">
+  <span>Install Neon Void to play offline</span>
+  <button id="installBtn">Install</button>
+  <button id="dismissBtn" class="alt" aria-label="Dismiss">✕</button>
+</div>
+
+<!-- Main menu -->
+<div id="menu" class="screen">
+  <h1>NEON<em>VOID</em></h1>
+  <p>Survive the endless alien swarm.</p>
+  <p>Best score: <b id="menuBest">0</b></p>
+  <button id="playBtn">PLAY</button>
+  <button id="optBtn" class="alt">AUTO-FIRE: ON</button>
+  <button id="helpBtn" class="alt">HOW TO PLAY</button>
+</div>
+
+<!-- How to play -->
+<div id="help" class="screen hidden">
+  <h2>HOW TO PLAY</h2>
+  <p><b>Desktop:</b> move with <kbd>arrows</kbd> or <kbd>WASD</kbd> (<kbd>ZQSD</kbd> on AZERTY), hold <kbd>Space</kbd> to fire if auto-fire is off, <kbd>P</kbd> to pause.</p>
+  <p><b>Mobile:</b> drag your finger, the ship follows and fires automatically.</p>
+  <p><b style="color:#00f0ff">S</b> Shield &nbsp; <b style="color:#ffe14d">M</b> Double / triple shot &nbsp; <b style="color:#4dff88">+</b> Heal</p>
+  <p>Drones fall, snipers shoot, kamikazes chase you, and a boss arrives every 40 seconds.</p>
+  <button id="helpBackBtn">BACK</button>
+</div>
+
+<!-- Pause -->
+<div id="pause" class="screen hidden">
+  <h2>PAUSED</h2>
+  <button id="resumeBtn">RESUME</button>
+  <button id="quitBtn" class="alt">MAIN MENU</button>
+</div>
+
+<!-- Game over -->
+<div id="over" class="screen hidden">
+  <h2>GAME OVER</h2>
+  <div class="big" id="finalScore">0</div>
+  <p id="overBest"></p>
+  <button id="retryBtn">PLAY AGAIN</button>
+  <button id="overMenuBtn" class="alt">MAIN MENU</button>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   1. CONFIG – tweak these numbers to rebalance the game
+   ===================================================================== */
+const CFG = {
+  player:   { speed:420, hp:3, maxHp:5, size:18, fireDelay:0.16, bulletSpeed:760, invulnTime:1.2, followRate:14 },
+  powerups: { dropChance:0.10, fallSpeed:90, size:14, shieldTime:6, multiTime:9 },
+  spawn:    { baseDelay:1.1, stepPerLevel:0.07, minDelay:0.3 },   // seconds between spawns
+  difficulty: { scorePerLevel:300, speedPerLevel:0.06, maxSpeedMul:2.2 },
+  enemies: {
+    // unlock = score needed before the type can appear
+    drone:    { hp:1,  speed:120, size:16, score:10,  unlock:0,   color:'#ff2bd6', weight:5 },
+    sniper:   { hp:3,  speed:90,  size:18, score:40,  unlock:200, color:'#9b5cff', weight:2, fireDelay:1.8, bulletSpeed:300, hoverY:0.14 },
+    kamikaze: { hp:2,  speed:210, size:15, score:25,  unlock:500, color:'#ff4d4d', weight:2.5, turnRate:2.2 },
+    boss:     { hp:40, speed:70,  size:46, score:500, unlock:0,   color:'#ff9f1a', fireDelay:1.3, bulletSpeed:280, every:40, hpPerLevel:6 }
+  },
+  enemyBullet: { size:5, color:'#ff4d6d' },
+  contactDamage: 1,
+  fx: { maxParticles:400, shakeOnHit:12, shakeOnKill:3 }
+};
+
+/* =====================================================================
+   2. SETUP: canvas, helpers, storage, PWA
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+let W = 0, H = 0, S = 1;                 // S = size scale for small / large screens
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+
+function resize() {
+  const d = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * d; cv.height = H * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  S = clamp(Math.min(W, H) / 600, 0.65, 1.3);
+  if (player) { player.x = clamp(player.x, 20, W - 20); player.y = clamp(player.y, 20, H - 20); }
+}
+
+function loadBest() { try { return +localStorage.getItem('neonvoid.best') || 0; } catch (e) { return 0; } }
+function saveBest(v) { try { localStorage.setItem('neonvoid.best', v); } catch (e) {} }
+
+/* ---- PWA: service worker (sw.js must be served from the same folder, over HTTPS or localhost) ---- */
+function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+/* ---- PWA: install message ---- */
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); installEvent = e; $('install').classList.remove('hidden');
+});
+window.addEventListener('appinstalled', () => $('install').classList.add('hidden'));
+$('installBtn').onclick = async () => {
+  if (!installEvent) return;
+  installEvent.prompt(); await installEvent.userChoice;
+  installEvent = null; $('install').classList.add('hidden');
+};
+$('dismissBtn').onclick = () => $('install').classList.add('hidden');
+
+/* =====================================================================
+   3. GAME STATE
+   ===================================================================== */
+let state = 'menu';                      // 'menu' | 'play' | 'pause' | 'over'
+let autoFire = true;
+let score = 0, best = loadBest(), time = 0, level = 1;
+let spawnTimer = 0, bossTimer = 0, shake = 0, banner = { text: '', t: 0 };
+let announced = {};
+
+const player = { x: 0, y: 0, r: 18, hp: 3, shield: 0, weapon: 1, weaponTime: 0, inv: 0, fireTimer: 0 };
+let enemies = [], bullets = [], enemyBullets = [], bonuses = [];
+
+/* Particle pool: allocated once, reused forever (no garbage) */
+const particles = Array.from({ length: CFG.fx.maxParticles },
+  () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, size: 2, color: '#fff' }));
+let particleIndex = 0;
+
+/* Parallax stars */
+const STAR_COLORS = ['#00f0ff', '#9b5cff', '#ff2bd6', '#ffffff'];
+const stars = Array.from({ length: 100 }, () => ({ x: Math.random(), y: Math.random(), z: rand(0.2, 1), c: STAR_COLORS[(Math.random() * 4) | 0] }));
+
+/* =====================================================================
+   4. INPUT
+   ===================================================================== */
+const keys = {};
+let pointer = null;                      // touch / mouse drag target
+
+// Physical key codes: KeyW/KeyA/KeyS/KeyD are also Z/Q/S/D on AZERTY keyboards.
+const KEY_MAP = { left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'] };
+const isDown = dir => KEY_MAP[dir].some(k => keys[k]);
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+  if (e.code === 'Enter' && (state === 'menu' || state === 'over')) startGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { if (state === 'play') togglePause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); });
+
+cv.addEventListener('pointerdown', e => { pointer = { x: e.clientX, y: e.clientY - 70 * S }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (pointer) { pointer.x = e.clientX; pointer.y = e.clientY - 70 * S; } });
+cv.addEventListener('pointerup', () => { pointer = null; });
+cv.addEventListener('pointercancel', () => { pointer = null; });
+
+/* =====================================================================
+   5. UI / SCREENS
+   ===================================================================== */
+function showScreen(id) {
+  ['menu', 'help', 'pause', 'over'].forEach(s => $(s).classList.toggle('hidden', s !== id));
+  $('pauseBtn').classList.toggle('hidden', state !== 'play');
+  $('menuBest').textContent = best;
+}
+function goMenu() { state = 'menu'; showScreen('menu'); }
+function togglePause() {
+  if (state === 'play') { state = 'pause'; showScreen('pause'); }
+  else if (state === 'pause') { state = 'play'; showScreen(null); }
+}
+function gameOver() {
+  state = 'over';
+  const isNew = score > best;
+  if (isNew) { best = score; saveBest(best); }
+  $('finalScore').textContent = score;
+  $('overBest').textContent = isNew ? 'NEW BEST SCORE!' : 'Best score: ' + best;
+  showScreen('over');
+}
+
+// Buttons (blur afterwards so Space never re-triggers them)
+const click = (id, fn) => { $(id).onclick = () => { $(id).blur(); fn(); }; };
+click('playBtn', () => startGame());
+click('retryBtn', () => startGame());
+click('helpBtn', () => showScreen('help'));
+click('helpBackBtn', () => showScreen('menu'));
+click('optBtn', () => { autoFire = !autoFire; $('optBtn').textContent = 'AUTO-FIRE: ' + (autoFire ? 'ON' : 'OFF'); });
+click('pauseBtn', togglePause);
+click('resumeBtn', togglePause);
+click('quitBtn', goMenu);
+click('overMenuBtn', goMenu);
+
+/* =====================================================================
+   6. ENTITIES
+   ===================================================================== */
+function startGame() {
+  enemies = []; bullets = []; enemyBullets = []; bonuses = [];
+  particles.forEach(p => p.on = false);
+  Object.assign(player, { x: W / 2, y: H * 0.8, hp: CFG.player.hp, shield: 0, weapon: 1, weaponTime: 0, inv: 1.5, fireTimer: 0 });
+  score = 0; time = 0; level = 1; spawnTimer = 1; announced = {};
+  bossTimer = CFG.enemies.boss.every; pointer = null;
+  state = 'play'; showScreen(null);
+  setBanner('GO!');
+}
+
+function setBanner(text) { banner.text = text; banner.t = 2; }
+const speedMul = () => Math.min(CFG.difficulty.maxSpeedMul, 1 + (level - 1) * CFG.difficulty.speedPerLevel);
+
+function spawnEnemy(type, x) {
+  const c = CFG.enemies[type];
+  const hp = c.hp + (type === 'boss' ? (level - 1) * c.hpPerLevel : 0);
+  enemies.push({ type, x, x0: x, y: -c.size * S * 2, r: c.size * S, hp, max: hp, t: 0,
+                 spd: speedMul(), fireT: 1, angle: Math.PI / 2, dead: false });
+}
+
+function shootAtPlayer(e, speed, offsetAngle = 0) {
+  const a = Math.atan2(player.y - e.y, player.x - e.x) + offsetAngle;
+  enemyBullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * speed * S, vy: Math.sin(a) * speed * S, r: CFG.enemyBullet.size * S, dead: false });
+}
+
+function spawnBonus(x, y, forced) {
+  if (!forced && Math.random() > CFG.powerups.dropChance) return;
+  const type = ['shield', 'multi', 'heal'][(Math.random() * 3) | 0];
+  bonuses.push({ type, x, y, r: CFG.powerups.size * S, age: 0, dead: false });
+}
+
+/* ---- Particles ---- */
+function burst(x, y, color, count, speed = 220) {
+  for (let i = 0; i < count; i++) {
+    const p = particles[particleIndex]; particleIndex = (particleIndex + 1) % particles.length;
+    const a = Math.random() * 6.283, v = rand(40, speed) * S;
+    p.on = true; p.x = x; p.y = y; p.vx = Math.cos(a) * v; p.vy = Math.sin(a) * v;
+    p.life = p.max = rand(0.3, 0.8); p.size = rand(1.5, 3.5) * S; p.color = color;
+  }
+}
+
+/* =====================================================================
+   7. SYSTEMS
+   ===================================================================== */
+function updatePlayer(dt) {
+  const P = CFG.player;
+  // Keyboard movement
+  let dx = (isDown('right') ? 1 : 0) - (isDown('left') ? 1 : 0);
+  let dy = (isDown('down') ? 1 : 0) - (isDown('up') ? 1 : 0);
+  if (dx || dy) { const n = Math.hypot(dx, dy); player.x += dx / n * P.speed * S * dt; player.y += dy / n * P.speed * S * dt; }
+  // Touch / mouse: ship follows the pointer smoothly
+  if (pointer) {
+    const k = Math.min(1, P.followRate * dt);
+    player.x += (pointer.x - player.x) * k; player.y += (pointer.y - player.y) * k;
+  }
+  player.x = clamp(player.x, player.r, W - player.r);
+  player.y = clamp(player.y, player.r + 50, H - player.r);
+
+  // Timers
+  player.inv = Math.max(0, player.inv - dt);
+  player.shield = Math.max(0, player.shield - dt);
+  if (player.weaponTime > 0 && (player.weaponTime -= dt) <= 0) player.weapon = 1;
+
+  // Shooting
+  player.fireTimer -= dt;
+  if (player.fireTimer <= 0 && (autoFire || keys.Space || pointer)) {
+    player.fireTimer = P.fireDelay;
+    const offsets = [[0], [-9, 9], [-14, 0, 14]][player.weapon - 1];
+    for (const o of offsets) {
+      bullets.push({ x: player.x + o * S, y: player.y - player.r, vx: player.weapon === 3 ? o * 8 : 0, vy: -P.bulletSpeed * S, dead: false });
+    }
+  }
+}
+
+function updateSpawning(dt) {
+  const E = CFG.enemies;
+  // Announce newly unlocked enemy types
+  for (const t of ['sniper', 'kamikaze']) {
+    if (score >= E[t].unlock && !announced[t]) { announced[t] = true; setBanner('NEW THREAT: ' + t.toUpperCase()); }
+  }
+  // Mini-boss on a timer
+  bossTimer -= dt;
+  if (bossTimer <= 0 && !enemies.some(e => e.type === 'boss')) {
+    bossTimer = E.boss.every; spawnEnemy('boss', W * 0.5); setBanner('WARNING: BOSS INCOMING');
+  }
+  // Regular waves
+  spawnTimer -= dt;
+  if (spawnTimer > 0) return;
+  spawnTimer = Math.max(CFG.spawn.minDelay, CFG.spawn.baseDelay - (level - 1) * CFG.spawn.stepPerLevel);
+
+  const pool = ['drone', 'sniper', 'kamikaze'].filter(t => score >= E[t].unlock);
+  let total = pool.reduce((s, t) => s + E[t].weight, 0), roll = Math.random() * total, type = pool[0];
+  for (const t of pool) { if ((roll -= E[t].weight) <= 0) { type = t; break; } }
+
+  const margin = 30 * S;
+  if (type === 'drone' && Math.random() < 0.3) {          // drone line formation
+    const n = 3 + Math.min(2, level >> 2), gap = 50 * S, x0 = rand(margin, W - margin - gap * (n - 1));
+    for (let i = 0; i < n; i++) spawnEnemy('drone', x0 + i * gap);
+  } else {
+    spawnEnemy(type, rand(margin, W - margin));
+  }
+}
+
+function updateEnemy(e, dt) {
+  const c = CFG.enemies[e.type], sp = c.speed * S * e.spd;
+  e.t += dt;
+  switch (e.type) {
+    case 'drone':                                          // straight line down
+      e.y += sp * dt; break;
+
+    case 'sniper': {                                       // hovers high, strafes, aims at player
+      const hoverY = H * c.hoverY;
+      if (e.y < hoverY) e.y += sp * dt;
+      e.x = clamp(e.x0 + Math.sin(e.t * 0.8) * 70 * S, e.r, W - e.r);
+      e.fireT -= dt;
+      if (e.fireT <= 0 && e.y >= hoverY - 2) { e.fireT = c.fireDelay / e.spd; shootAtPlayer(e, c.bulletSpeed); }
+      break;
+    }
+    case 'kamikaze': {                                     // homes in on the player
+      const want = Math.atan2(player.y - e.y, player.x - e.x);
+      let diff = Math.atan2(Math.sin(want - e.angle), Math.cos(want - e.angle));
+      e.angle += clamp(diff, -c.turnRate * dt, c.turnRate * dt);
+      e.x += Math.cos(e.angle) * sp * dt; e.y += Math.sin(e.angle) * sp * dt;
+      break;
+    }
+    case 'boss': {                                         // zigzag across the top, fires a fan of bullets
+      const holdY = H * 0.16;
+      if (e.y < holdY) e.y += sp * 1.5 * dt;
+      const tri = Math.abs(((e.t * 0.24 + 0.25) % 1) * 4 - 2) - 1;   // triangle wave -1..1
+      e.x = W / 2 + tri * W * 0.35;
+      e.fireT -= dt;
+      if (e.fireT <= 0 && e.y >= holdY - 2) {
+        e.fireT = c.fireDelay / e.spd;
+        const n = 3 + Math.min(4, level >> 1);
+        for (let i = 0; i < n; i++) shootAtPlayer(e, c.bulletSpeed, (i - (n - 1) / 2) * 0.25);
+      }
+      break;
+    }
+  }
+  if (e.y > H + 80 || e.x < -100 || e.x > W + 100) e.dead = true;   // left the screen
+}
+
+function hurtPlayer() {
+  if (player.inv > 0) return;
+  if (player.shield > 0) {                                 // shield absorbs one hit
+    player.shield = 0; player.inv = 0.5; burst(player.x, player.y, '#00f0ff', 18); shake = 6; return;
+  }
+  player.hp--; player.inv = CFG.player.invulnTime; shake = CFG.fx.shakeOnHit;
+  burst(player.x, player.y, '#ff4d6d', 24);
+  if (player.hp <= 0) { burst(player.x, player.y, '#00f0ff', 60, 380); shake = 20; gameOver(); }
+}
+
+function killEnemy(e) {
+  e.dead = true;
+  const c = CFG.enemies[e.type];
+  score += c.score;
+  burst(e.x, e.y, c.color, e.type === 'boss' ? 80 : 18, e.type === 'boss' ? 400 : 220);
+  burst(e.x, e.y, '#ffffff', e.type === 'boss' ? 20 : 5);
+  shake = Math.max(shake, e.type === 'boss' ? 14 : CFG.fx.shakeOnKill);
+  spawnBonus(e.x, e.y, e.type === 'boss');                 // boss always drops a bonus
+}
+
+function applyBonus(b) {
+  b.dead = true; burst(b.x, b.y, '#ffffff', 12);
+  if (b.type === 'shield') player.shield = CFG.powerups.shieldTime;
+  if (b.type === 'heal') player.hp = Math.min(CFG.player.maxHp, player.hp + 1);
+  if (b.type === 'multi') { player.weapon = player.weapon >= 2 ? 3 : 2; player.weaponTime = CFG.powerups.multiTime; }
+}
+
+function updateCollisions() {
+  // Player bullets vs enemies
+  for (const b of bullets) {
+    for (const e of enemies) {
+      if (e.dead || b.dead) continue;
+      if (dist2(b, e) < (e.r + 4) ** 2) {
+        b.dead = true; e.hp--; burst(b.x, b.y, CFG.enemies[e.type].color, 3, 120);
+        if (e.hp <= 0) killEnemy(e);
+      }
+    }
+  }
+  // Enemy bullets vs player
+  for (const b of enemyBullets) {
+    if (!b.dead && dist2(b, player) < (b.r + player.r * 0.7) ** 2) { b.dead = true; hurtPlayer(); }
+  }
+  // Enemy bodies vs player
+  for (const e of enemies) {
+    if (!e.dead && dist2(e, player) < (e.r + player.r * 0.7) ** 2) {
+      if (e.type !== 'boss') killEnemy(e);
+      hurtPlayer();
+    }
+  }
+  // Bonuses vs player
+  for (const b of bonuses) {
+    if (!b.dead && dist2(b, player) < (b.r + player.r) ** 2) applyBonus(b);
+  }
+}
+
+function updateWorld(dt) {
+  const lvl = Math.min(level, 10);
+  for (const s of stars) {                                 // scrolling starfield = the "auto-advance"
+    s.y += (0.05 + s.z * 0.5) * (1 + lvl * 0.05) * dt * (state === 'play' ? 1 : 0.4);
+    if (s.y > 1) { s.y = 0; s.x = Math.random(); }
+  }
+  for (const p of particles) {
+    if (!p.on) continue;
+    p.life -= dt; if (p.life <= 0) { p.on = false; continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.98; p.vy *= 0.98;
+  }
+  shake *= Math.pow(0.85, dt * 60);
+  if (shake < 0.2) shake = 0;
+  banner.t = Math.max(0, banner.t - dt);
+}
+
+function updateGame(dt) {
+  time += dt;
+  level = 1 + Math.floor(score / CFG.difficulty.scorePerLevel);
+  updatePlayer(dt);
+  updateSpawning(dt);
+  enemies.forEach(e => updateEnemy(e, dt));
+  for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; if (b.y < -20) b.dead = true; }
+  for (const b of enemyBullets) {
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.y > H + 20 || b.y < -20 || b.x < -20 || b.x > W + 20) b.dead = true;
+  }
+  for (const b of bonuses) { b.age += dt; b.y += CFG.powerups.fallSpeed * S * dt; if (b.y > H + 30) b.dead = true; }
+  updateCollisions();
+  // Remove dead objects
+  enemies = enemies.filter(e => !e.dead); bullets = bullets.filter(b => !b.dead);
+  enemyBullets = enemyBullets.filter(b => !b.dead); bonuses = bonuses.filter(b => !b.dead);
+}
+
+/* =====================================================================
+   8. RENDERING (neon vector shapes only)
+   ===================================================================== */
+const SHAPES = {   // unit-size polygons, drawn scaled by radius
+  player:   [[0, -1.3], [0.85, 0.9], [0, 0.45], [-0.85, 0.9]],
+  drone:    [[0, 1], [0.9, -0.2], [0.55, -0.9], [-0.55, -0.9], [-0.9, -0.2]],
+  sniper:   [[0, 1.3], [0.75, 0], [0, -1], [-0.75, 0]],
+  kamikaze: [[0, 1.3], [0.7, -0.8], [0, -0.3], [-0.7, -0.8]],
+  boss:     [[-1, -0.5], [-0.5, -1], [0.5, -1], [1, -0.5], [1, 0.5], [0.5, 1], [0, 0.7], [-0.5, 1], [-1, 0.5]],
+  flame:    [[-0.3, 0.7], [0, 1.4], [0.3, 0.7]]
+};
+
+function drawShape(pts, x, y, r, color, rot = 0) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](p[0] * r, p[1] * r));
+  ctx.closePath();
+  ctx.shadowColor = color; ctx.shadowBlur = 14;
+  ctx.fillStyle = color + '33'; ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
+}
+
+function drawStars() {
+  for (const s of stars) {
+    ctx.globalAlpha = 0.3 + s.z * 0.7; ctx.fillStyle = s.c;
+    ctx.fillRect(s.x * W, s.y * H, s.z * 2, 1 + s.z * 6);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBonus(b) {
+  const colors = { shield: '#00f0ff', multi: '#ffe14d', heal: '#4dff88' };
+  const labels = { shield: 'S', multi: 'M', heal: '+' };
+  const k = Math.min(1, b.age / 0.4);                      // pop-in animation
+  const scale = (1 - Math.pow(1 - k, 3)) * (1 + 0.1 * Math.sin(b.age * 6));
+  ctx.save(); ctx.translate(b.x, b.y); ctx.scale(scale, scale);
+  ctx.shadowColor = colors[b.type]; ctx.shadowBlur = 14;
+  ctx.strokeStyle = colors[b.type]; ctx.lineWidth = 2; ctx.fillStyle = colors[b.type] + '33';
+  ctx.beginPath(); ctx.arc(0, 0, b.r, 0, 6.283); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = '#fff'; ctx.font = `700 ${b.r * 1.2}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(labels[b.type], 0, 1);
+  ctx.restore();
+}
+
+function drawPlayer() {
+  if (player.inv > 0 && Math.floor(player.inv * 20) % 2) return;   // blink when invulnerable
+  const r = player.r;
+  drawShape(SHAPES.flame, player.x, player.y + r * 0.4, r * (0.8 + Math.random() * 0.4), '#ff2bd6');
+  drawShape(SHAPES.player, player.x, player.y, r, '#00f0ff');
+  if (player.shield > 0) {
+    ctx.save(); ctx.strokeStyle = '#00f0ff'; ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 16;
+    ctx.globalAlpha = player.shield < 1.5 ? 0.4 + 0.4 * Math.sin(time * 20) : 0.9;   // flickers before ending
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(player.x, player.y, r * 1.7, 0, 6.283); ctx.stroke(); ctx.restore();
+  }
+}
+
+function drawHUD() {
+  ctx.save(); ctx.shadowBlur = 0; ctx.textBaseline = 'top';
+  ctx.font = '700 22px "Trebuchet MS", sans-serif'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#00f0ff'; ctx.fillText('SCORE ' + score, 14, 12);
+  ctx.fillStyle = '#ff2bd6'; ctx.font = '700 20px sans-serif'; ctx.fillText('♥'.repeat(Math.max(0, player.hp)), 14, 40);
+  ctx.font = '700 14px "Trebuchet MS", sans-serif'; ctx.fillStyle = '#c9b8ff';
+  let y = 68;
+  if (player.shield > 0) { ctx.fillText('SHIELD ' + player.shield.toFixed(1) + 's', 14, y); y += 18; }
+  if (player.weapon > 1) ctx.fillText('x' + player.weapon + ' SHOT ' + player.weaponTime.toFixed(1) + 's', 14, y);
+  ctx.textAlign = 'right';
+  ctx.fillText('LEVEL ' + level, W - 70, 14); ctx.fillText('BEST ' + Math.max(best, score), W - 70, 34);
+  if (banner.t > 0) {                                      // centered message
+    ctx.globalAlpha = Math.min(1, banner.t); ctx.textAlign = 'center';
+    ctx.font = '700 26px "Trebuchet MS", sans-serif'; ctx.fillStyle = '#ffe14d';
+    ctx.shadowColor = '#ffe14d'; ctx.shadowBlur = 16; ctx.fillText(banner.text, W / 2, H * 0.3);
+  }
+  ctx.restore();
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  if (shake) ctx.translate(rand(-shake, shake), rand(-shake, shake));   // screen shake
+  drawStars();
+  const playing = state !== 'menu';
+  if (playing) {
+    bonuses.forEach(drawBonus);
+    for (const e of enemies) {
+      drawShape(SHAPES[e.type], e.x, e.y, e.r, CFG.enemies[e.type].color, e.type === 'kamikaze' ? e.angle - Math.PI / 2 : 0);
+      if (e.type === 'boss') {                             // boss health bar
+        const w = e.r * 2;
+        ctx.fillStyle = '#ffffff22'; ctx.fillRect(e.x - w / 2, e.y - e.r - 14, w, 5);
+        ctx.fillStyle = '#ff9f1a'; ctx.fillRect(e.x - w / 2, e.y - e.r - 14, w * e.hp / e.max, 5);
+      }
+    }
+    ctx.fillStyle = '#00f0ff'; ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 10;
+    for (const b of bullets) ctx.fillRect(b.x - 2 * S, b.y - 8 * S, 4 * S, 14 * S);
+    ctx.fillStyle = CFG.enemyBullet.color; ctx.shadowColor = CFG.enemyBullet.color;
+    for (const b of enemyBullets) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.283); ctx.fill(); }
+    ctx.shadowBlur = 0;
+    if (state !== 'over') drawPlayer();
+  }
+  // Particles (additive blending = glowing explosions)
+  ctx.globalCompositeOperation = 'lighter';
+  for (const p of particles) {
+    if (!p.on) continue;
+    ctx.globalAlpha = p.life / p.max; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+  if (playing) drawHUD();
+}
+
+/* =====================================================================
+   9. MAIN LOOP
+   ===================================================================== */
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);          // clamp dt after tab switches
+  last = now;
+  if (state === 'play') updateGame(dt);
+  if (state !== 'pause') updateWorld(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* =====================================================================
+   10. INIT
+   ===================================================================== */
+addEventListener('resize', resize);
+resize();
+setupServiceWorker();
+showScreen('menu');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
