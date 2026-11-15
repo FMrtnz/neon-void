@@ -42,6 +42,7 @@ When you change any file, bump `CACHE_VERSION` in `sw.js` (for example `neon-voi
 | Move | Arrows or WASD (ZQSD on AZERTY) | Drag your finger, the ship follows |
 | Fire | Automatic, or hold Space if auto-fire is off | Automatic |
 | Pause | P or Esc, or the pause button | Pause button |
+| Mute | M or the speaker button | Speaker button |
 | Start | Enter on the menu | Play button |
 
 Auto-fire can be switched on or off in the main menu. The game also pauses by itself when the tab loses focus.
@@ -69,6 +70,18 @@ Auto-fire can be switched on or off in the main menu. The game also pauses by it
 | M | Double shot, then triple shot if you grab another, for 9 seconds |
 | + | Heals 1 HP |
 
+## Sound
+
+All audio is synthesized in the browser with the Web Audio API, so there are no audio files to load and it works offline.
+
+- **Effects**: shots (higher pitch with double/triple shot), explosions (small, medium, boss), player hit, shield break, one distinct sound per bonus, level up, boss siren, low-HP alarm, game over jingle and menu clicks.
+- **Music**: a synthwave loop (bass, arpeggio, pad) that gets drums at level 3 and a faster tempo during boss fights. It stops on pause and game over.
+- **Settings**: the AUDIO menu has separate music and effects volumes plus a mute switch. Press **M** or tap the speaker button in game. Settings are saved in `localStorage`.
+- **Vibration**: a short haptic pulse when you are hit (Android only).
+- Browsers block audio until the first tap or click, so sound starts when you press Play.
+
+To change a sound, edit the `SFX` table in the `Sound` module. To change the music, edit `CHORDS` and `scheduleStep`.
+
 ## Balancing the game
 
 All tuning values are grouped in the `CFG` object at the top of the script in `index.html`: player speed and HP, fire rate, spawn delay, difficulty curve, enemy HP, speed, score and unlock thresholds, bonus durations and drop chance, shake strength, and the particle limit.
@@ -79,6 +92,7 @@ All tuning values are grouped in the `CFG` object at the top of the script in `i
 
 1. **Config**: the `CFG` object
 2. **Setup**: canvas, helpers, `localStorage`, service worker registration, install banner
+   - **2b. Sound**: the `Sound` module (Web Audio API)
 3. **Game state**: player, enemy, bullet and bonus arrays, the particle pool, stars
 4. **Input**: keyboard and pointer (touch/mouse) handling
 5. **UI / screens**: menu, how to play, pause, game over

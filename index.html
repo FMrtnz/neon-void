@@ -35,7 +35,10 @@ button:hover, button:focus-visible { background:rgba(0,240,255,.16); transform:s
 button.alt { color:var(--violet); border-color:var(--violet); box-shadow:0 0 12px rgba(155,92,255,.6), inset 0 0 12px rgba(155,92,255,.2); }
 button.alt:hover { background:rgba(155,92,255,.16); }
 
-#pauseBtn { position:fixed; top:calc(8px + env(safe-area-inset-top)); right:8px; min-width:0; padding:8px 14px; letter-spacing:0; }
+#pauseBtn, #muteBtn { position:fixed; top:calc(8px + env(safe-area-inset-top)); right:8px; min-width:0; padding:8px 14px; letter-spacing:0; }
+#muteBtn { right:64px; }
+label { display:flex; flex-direction:column; gap:8px; color:var(--cyan); font-weight:700; letter-spacing:3px; }
+input[type=range] { width:250px; accent-color:var(--magenta); touch-action:pan-x; }
 #install { position:fixed; left:10px; right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); display:flex; gap:10px;
   align-items:center; justify-content:center; padding:10px; background:rgba(10,4,32,.92); border:1px solid var(--violet);
   border-radius:12px; font-size:14px; z-index:5; }
@@ -46,6 +49,7 @@ kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:
 <body>
 <canvas id="c"></canvas>
 <button id="pauseBtn" class="hidden" aria-label="Pause">❚❚</button>
+<button id="muteBtn" class="hidden" aria-label="Mute">🔊</button>
 
 <!-- Install message (shown only when the browser says the app can be installed) -->
 <div id="install" class="hidden">
@@ -61,17 +65,27 @@ kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:
   <p>Best score: <b id="menuBest">0</b></p>
   <button id="playBtn">PLAY</button>
   <button id="optBtn" class="alt">AUTO-FIRE: ON</button>
+  <button id="audioBtn" class="alt">AUDIO</button>
   <button id="helpBtn" class="alt">HOW TO PLAY</button>
 </div>
 
 <!-- How to play -->
 <div id="help" class="screen hidden">
   <h2>HOW TO PLAY</h2>
-  <p><b>Desktop:</b> move with <kbd>arrows</kbd> or <kbd>WASD</kbd> (<kbd>ZQSD</kbd> on AZERTY), hold <kbd>Space</kbd> to fire if auto-fire is off, <kbd>P</kbd> to pause.</p>
+  <p><b>Desktop:</b> move with <kbd>arrows</kbd> or <kbd>WASD</kbd> (<kbd>ZQSD</kbd> on AZERTY), hold <kbd>Space</kbd> to fire if auto-fire is off, <kbd>P</kbd> to pause, <kbd>M</kbd> to mute.</p>
   <p><b>Mobile:</b> drag your finger, the ship follows and fires automatically.</p>
   <p><b style="color:#00f0ff">S</b> Shield &nbsp; <b style="color:#ffe14d">M</b> Double / triple shot &nbsp; <b style="color:#4dff88">+</b> Heal</p>
   <p>Drones fall, snipers shoot, kamikazes chase you, and a boss arrives every 40 seconds.</p>
   <button id="helpBackBtn">BACK</button>
+</div>
+
+<!-- Audio settings -->
+<div id="audio" class="screen hidden">
+  <h2>AUDIO</h2>
+  <label>MUSIC <input type="range" id="musicVol" min="0" max="100"></label>
+  <label>EFFECTS <input type="range" id="sfxVol" min="0" max="100"></label>
+  <button id="muteToggleBtn" class="alt">SOUND: ON</button>
+  <button id="audioBackBtn">BACK</button>
 </div>
 
 <!-- Pause -->
@@ -155,13 +169,124 @@ $('installBtn').onclick = async () => {
 $('dismissBtn').onclick = () => $('install').classList.add('hidden');
 
 /* =====================================================================
+   2b. SOUND – everything is synthesized with the Web Audio API (no audio files)
+   ===================================================================== */
+const Sound = (() => {
+  let ac = null, sfxBus, musicBus, noiseBuf;
+  let musicOn = false, timer = null, step = 0, nextTime = 0, tempo = 100, intensity = 0;
+  const cfg = Object.assign({ sfx: 0.7, music: 0.5, mute: false }, load());
+  const last = {};                                          // per-sound throttle timestamps
+
+  function load() { try { return JSON.parse(localStorage.getItem('neonvoid.audio')) || {}; } catch (e) { return {}; } }
+  function save() { try { localStorage.setItem('neonvoid.audio', JSON.stringify(cfg)); } catch (e) {} }
+
+  // Must be called from a user gesture (browsers block audio until then)
+  function init() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ac = new AC();
+    sfxBus = ac.createGain(); musicBus = ac.createGain();
+    sfxBus.connect(ac.destination); musicBus.connect(ac.destination);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    apply();
+  }
+  function apply() {                                        // volumes + mute
+    if (!ac) return;
+    const m = cfg.mute ? 0 : 1, t = ac.currentTime;
+    sfxBus.gain.setTargetAtTime(cfg.sfx * m, t, 0.02);
+    musicBus.gain.setTargetAtTime(musicOn ? cfg.music * m * 0.6 : 0, t, 0.05);
+  }
+
+  /* ---- Building blocks: a pitched tone and a filtered noise burst ---- */
+  function tone(type, f1, f2, dur, vol, delay = 0, out = sfxBus) {
+    const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f1, t);
+    if (f2 !== f1) o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function noise(dur, vol, f1, f2, delay = 0, type = 'lowpass', out = sfxBus) {
+    const t = ac.currentTime + delay, s = ac.createBufferSource(), fl = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noiseBuf; fl.type = type;
+    fl.frequency.setValueAtTime(f1, t); fl.frequency.exponentialRampToValueAtTime(f2, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(out); s.start(t); s.stop(t + dur);
+  }
+
+  /* ---- Sound effects ---- */
+  const SFX = {
+    shoot:   w => tone('square', 700 + w * 120, 200, 0.08, 0.06),           // higher with double / triple shot
+    explode: size => {                                                      // 0 = small, 1 = medium, 2 = boss
+      const dur = [0.25, 0.4, 1][size];
+      noise(dur, [0.35, 0.5, 0.7][size], [2500, 2000, 1500][size], 80);
+      tone('sine', [140, 100, 70][size], 30, dur, 0.35);
+    },
+    hit:         () => { noise(0.3, 0.5, 1800, 100); tone('sawtooth', 220, 50, 0.3, 0.25); },
+    shieldBreak: () => { tone('square', 900, 120, 0.25, 0.15); noise(0.2, 0.3, 6000, 800, 0, 'highpass'); },
+    shield:  () => { tone('sine', 300, 1000, 0.4, 0.2); noise(0.4, 0.12, 500, 4000, 0, 'bandpass'); },
+    multi:   () => [523, 659, 784, 1047].forEach((f, i) => tone('triangle', f, f, 0.12, 0.2, i * 0.06)),
+    heal:    () => { tone('sine', 880, 880, 0.5, 0.18); tone('sine', 1319, 1319, 0.6, 0.15, 0.12); },
+    levelUp: () => [440, 554, 659, 880].forEach((f, i) => tone('square', f, f, 0.1, 0.08, i * 0.07)),
+    boss:    () => [0, 0.35, 0.7].forEach(d => tone('sawtooth', 380, 760, 0.33, 0.12, d)),   // siren
+    alarm:   () => tone('sine', 880, 880, 0.12, 0.15),                                       // 1 HP left
+    click:   () => tone('square', 620, 620, 0.04, 0.07),
+    gameOver: () => { [392, 330, 262, 196].forEach((f, i) => tone('sawtooth', f, f * 0.97, 0.4, 0.15, i * 0.25)); noise(1, 0.25, 800, 60, 0.2); }
+  };
+  function play(name, arg) {
+    if (!ac || cfg.mute) return;
+    const now = performance.now();
+    if (last[name] && now - last[name] < (name === 'shoot' ? 60 : 30)) return;   // avoid stacking
+    last[name] = now;
+    SFX[name](arg);
+  }
+
+  /* ---- Music: 4 chords (Am F C G), bass + arpeggio + pad, drums at higher intensity ---- */
+  const CHORDS = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]];     // MIDI notes
+  const midi = n => 440 * Math.pow(2, (n - 69) / 12);
+  function note(type, f, t, dur, vol, cutoff) {
+    const o = ac.createOscillator(), fl = ac.createBiquadFilter(), g = ac.createGain();
+    o.type = type; o.frequency.value = f; fl.type = 'lowpass'; fl.frequency.value = cutoff;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(fl); fl.connect(g); g.connect(musicBus); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function scheduleStep(s, t) {                              // s = sixteenth-note counter (0..63)
+    const i = s & 15, ch = CHORDS[(s >> 4) & 3], d = 60 / tempo / 4, delay = t - ac.currentTime;
+    if (i % 2 === 0) note('sawtooth', midi(ch[0] - 12), t, d * 1.8, 0.3, 500);                       // bass
+    if (i % 2 === 0 || intensity > 0) note('square', midi(ch[[0, 1, 2, 1][i % 4]] + 12), t, d * 0.9, 0.12, 1800 + intensity * 800);   // arpeggio
+    if (i === 0) ch.forEach(n => note('triangle', midi(n), t, d * 14, 0.08, 1200));                  // pad
+    if (intensity > 0 && i % 4 === 0) tone('sine', 150, 40, 0.15, 0.8, delay, musicBus);            // kick
+    if (intensity > 1 && i % 4 === 2) noise(0.05, 0.25, 7000, 7000, delay, 'highpass', musicBus);   // hi-hat
+  }
+  function tick() {                                          // look-ahead scheduler
+    while (nextTime < ac.currentTime + 0.15) { scheduleStep(step, nextTime); nextTime += 60 / tempo / 4; step = (step + 1) % 64; }
+  }
+  function startMusic() {
+    if (!ac || musicOn) return;
+    musicOn = true; apply(); step = 0; nextTime = ac.currentTime + 0.08; timer = setInterval(tick, 50);
+  }
+  function stopMusic() {
+    if (!ac || !musicOn) return;
+    musicOn = false; clearInterval(timer); apply();
+  }
+  function setIntensity(level, boss) {                       // 0..2, boss fight = faster tempo
+    intensity = boss ? 2 : level; tempo = boss ? 138 : 100 + level * 8;
+  }
+
+  return { cfg, init, apply, save, play, startMusic, stopMusic, setIntensity };
+})();
+
+/* =====================================================================
    3. GAME STATE
    ===================================================================== */
 let state = 'menu';                      // 'menu' | 'play' | 'pause' | 'over'
 let autoFire = true;
 let score = 0, best = loadBest(), time = 0, level = 1;
 let spawnTimer = 0, bossTimer = 0, shake = 0, banner = { text: '', t: 0 };
-let announced = {};
+let announced = {}, lastLevel = 1, lowHpTimer = 0;
 
 const player = { x: 0, y: 0, r: 18, hp: 3, shield: 0, weapon: 1, weaponTime: 0, inv: 0, fireTimer: 0 };
 let enemies = [], bullets = [], enemyBullets = [], bonuses = [];
@@ -189,6 +314,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+  if (e.code === 'KeyM') toggleMute();
   if (e.code === 'Enter' && (state === 'menu' || state === 'over')) startGame();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -204,17 +330,19 @@ cv.addEventListener('pointercancel', () => { pointer = null; });
    5. UI / SCREENS
    ===================================================================== */
 function showScreen(id) {
-  ['menu', 'help', 'pause', 'over'].forEach(s => $(s).classList.toggle('hidden', s !== id));
+  ['menu', 'help', 'audio', 'pause', 'over'].forEach(s => $(s).classList.toggle('hidden', s !== id));
   $('pauseBtn').classList.toggle('hidden', state !== 'play');
+  $('muteBtn').classList.toggle('hidden', state !== 'play');
   $('menuBest').textContent = best;
 }
-function goMenu() { state = 'menu'; showScreen('menu'); }
+function goMenu() { state = 'menu'; Sound.stopMusic(); showScreen('menu'); }
 function togglePause() {
-  if (state === 'play') { state = 'pause'; showScreen('pause'); }
-  else if (state === 'pause') { state = 'play'; showScreen(null); }
+  if (state === 'play') { state = 'pause'; Sound.stopMusic(); showScreen('pause'); }
+  else if (state === 'pause') { state = 'play'; Sound.startMusic(); showScreen(null); }
 }
 function gameOver() {
   state = 'over';
+  Sound.stopMusic(); Sound.play('gameOver');
   const isNew = score > best;
   if (isNew) { best = score; saveBest(best); }
   $('finalScore').textContent = score;
@@ -223,7 +351,7 @@ function gameOver() {
 }
 
 // Buttons (blur afterwards so Space never re-triggers them)
-const click = (id, fn) => { $(id).onclick = () => { $(id).blur(); fn(); }; };
+const click = (id, fn) => { $(id).onclick = () => { $(id).blur(); Sound.init(); Sound.play('click'); fn(); }; };
 click('playBtn', () => startGame());
 click('retryBtn', () => startGame());
 click('helpBtn', () => showScreen('help'));
@@ -233,6 +361,22 @@ click('pauseBtn', togglePause);
 click('resumeBtn', togglePause);
 click('quitBtn', goMenu);
 click('overMenuBtn', goMenu);
+
+// Audio settings
+function toggleMute() { Sound.cfg.mute = !Sound.cfg.mute; Sound.save(); Sound.apply(); updateAudioUI(); }
+function updateAudioUI() {
+  const m = Sound.cfg.mute;
+  $('muteBtn').textContent = m ? '🔇' : '🔊';
+  $('muteToggleBtn').textContent = 'SOUND: ' + (m ? 'OFF' : 'ON');
+  $('musicVol').value = Sound.cfg.music * 100; $('sfxVol').value = Sound.cfg.sfx * 100;
+}
+click('audioBtn', () => { showScreen('audio'); Sound.startMusic(); });     // music plays as a preview
+click('audioBackBtn', () => { Sound.stopMusic(); showScreen('menu'); });
+click('muteToggleBtn', toggleMute);
+click('muteBtn', toggleMute);
+$('musicVol').oninput = e => { Sound.cfg.music = e.target.value / 100; Sound.save(); Sound.apply(); };
+$('sfxVol').oninput = e => { Sound.cfg.sfx = e.target.value / 100; Sound.save(); Sound.apply(); };
+$('sfxVol').onchange = () => Sound.play('explode', 1);                      // effect preview
 
 /* =====================================================================
    6. ENTITIES
@@ -244,6 +388,8 @@ function startGame() {
   score = 0; time = 0; level = 1; spawnTimer = 1; announced = {};
   bossTimer = CFG.enemies.boss.every; pointer = null;
   state = 'play'; showScreen(null);
+  lastLevel = 1; lowHpTimer = 0;
+  Sound.init(); Sound.startMusic();
   setBanner('GO!');
 }
 
@@ -304,6 +450,7 @@ function updatePlayer(dt) {
   player.fireTimer -= dt;
   if (player.fireTimer <= 0 && (autoFire || keys.Space || pointer)) {
     player.fireTimer = P.fireDelay;
+    Sound.play('shoot', player.weapon);
     const offsets = [[0], [-9, 9], [-14, 0, 14]][player.weapon - 1];
     for (const o of offsets) {
       bullets.push({ x: player.x + o * S, y: player.y - player.r, vx: player.weapon === 3 ? o * 8 : 0, vy: -P.bulletSpeed * S, dead: false });
@@ -320,7 +467,7 @@ function updateSpawning(dt) {
   // Mini-boss on a timer
   bossTimer -= dt;
   if (bossTimer <= 0 && !enemies.some(e => e.type === 'boss')) {
-    bossTimer = E.boss.every; spawnEnemy('boss', W * 0.5); setBanner('WARNING: BOSS INCOMING');
+    bossTimer = E.boss.every; spawnEnemy('boss', W * 0.5); setBanner('WARNING: BOSS INCOMING'); Sound.play('boss');
   }
   // Regular waves
   spawnTimer -= dt;
@@ -382,9 +529,10 @@ function updateEnemy(e, dt) {
 function hurtPlayer() {
   if (player.inv > 0) return;
   if (player.shield > 0) {                                 // shield absorbs one hit
-    player.shield = 0; player.inv = 0.5; burst(player.x, player.y, '#00f0ff', 18); shake = 6; return;
+    player.shield = 0; player.inv = 0.5; burst(player.x, player.y, '#00f0ff', 18); shake = 6; Sound.play('shieldBreak'); return;
   }
   player.hp--; player.inv = CFG.player.invulnTime; shake = CFG.fx.shakeOnHit;
+  Sound.play('hit'); if (navigator.vibrate) navigator.vibrate(80);   // haptic feedback (Android)
   burst(player.x, player.y, '#ff4d6d', 24);
   if (player.hp <= 0) { burst(player.x, player.y, '#00f0ff', 60, 380); shake = 20; gameOver(); }
 }
@@ -393,6 +541,7 @@ function killEnemy(e) {
   e.dead = true;
   const c = CFG.enemies[e.type];
   score += c.score;
+  Sound.play('explode', e.type === 'boss' ? 2 : e.type === 'drone' ? 0 : 1);
   burst(e.x, e.y, c.color, e.type === 'boss' ? 80 : 18, e.type === 'boss' ? 400 : 220);
   burst(e.x, e.y, '#ffffff', e.type === 'boss' ? 20 : 5);
   shake = Math.max(shake, e.type === 'boss' ? 14 : CFG.fx.shakeOnKill);
@@ -400,7 +549,7 @@ function killEnemy(e) {
 }
 
 function applyBonus(b) {
-  b.dead = true; burst(b.x, b.y, '#ffffff', 12);
+  b.dead = true; burst(b.x, b.y, '#ffffff', 12); Sound.play(b.type);
   if (b.type === 'shield') player.shield = CFG.powerups.shieldTime;
   if (b.type === 'heal') player.hp = Math.min(CFG.player.maxHp, player.hp + 1);
   if (b.type === 'multi') { player.weapon = player.weapon >= 2 ? 3 : 2; player.weaponTime = CFG.powerups.multiTime; }
@@ -453,6 +602,9 @@ function updateWorld(dt) {
 function updateGame(dt) {
   time += dt;
   level = 1 + Math.floor(score / CFG.difficulty.scorePerLevel);
+  if (level > lastLevel) { lastLevel = level; Sound.play('levelUp'); setBanner('LEVEL ' + level); }
+  Sound.setIntensity(Math.min(2, (level - 1) >> 1), enemies.some(e => e.type === 'boss'));   // music reacts to the game
+  if (player.hp === 1 && (lowHpTimer -= dt) <= 0) { lowHpTimer = 1.2; Sound.play('alarm'); }
   updatePlayer(dt);
   updateSpawning(dt);
   enemies.forEach(e => updateEnemy(e, dt));
@@ -535,7 +687,7 @@ function drawHUD() {
   if (player.shield > 0) { ctx.fillText('SHIELD ' + player.shield.toFixed(1) + 's', 14, y); y += 18; }
   if (player.weapon > 1) ctx.fillText('x' + player.weapon + ' SHOT ' + player.weaponTime.toFixed(1) + 's', 14, y);
   ctx.textAlign = 'right';
-  ctx.fillText('LEVEL ' + level, W - 70, 14); ctx.fillText('BEST ' + Math.max(best, score), W - 70, 34);
+  ctx.fillText('LEVEL ' + level, W - 120, 14); ctx.fillText('BEST ' + Math.max(best, score), W - 120, 34);
   if (banner.t > 0) {                                      // centered message
     ctx.globalAlpha = Math.min(1, banner.t); ctx.textAlign = 'center';
     ctx.font = '700 26px "Trebuchet MS", sans-serif'; ctx.fillStyle = '#ffe14d';
@@ -598,6 +750,7 @@ addEventListener('resize', resize);
 resize();
 setupServiceWorker();
 showScreen('menu');
+updateAudioUI();
 requestAnimationFrame(loop);
 </script>
 </body>

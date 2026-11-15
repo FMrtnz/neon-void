@@ -1,6 +1,6 @@
 // Neon Void service worker: precache the game, then serve it offline.
 // Bump CACHE_VERSION whenever you change any file so players get the update.
-const CACHE_VERSION = 'neon-void-v2';
+const CACHE_VERSION = 'neon-void-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
