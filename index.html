@@ -37,6 +37,16 @@ button.alt:hover { background:rgba(155,92,255,.16); }
 
 #pauseBtn, #muteBtn { position:fixed; top:calc(8px + env(safe-area-inset-top)); right:8px; min-width:0; padding:8px 14px; letter-spacing:0; }
 #muteBtn { right:64px; }
+#muteBtn svg { display:block; }
+/* Bomb button: a circle that fills (--p) as you destroy enemies */
+#bombBtn { position:fixed; right:14px; bottom:calc(18px + env(safe-area-inset-bottom)); z-index:6; width:82px; height:82px; min-width:0;
+  padding:0; border:0; border-radius:50%; --p:0%; display:flex; align-items:center; justify-content:center;
+  background:conic-gradient(#ff9f1a var(--p), rgba(255,159,26,.2) 0); box-shadow:0 0 10px rgba(255,159,26,.35); }
+#bombBtn::before { content:''; position:absolute; inset:7px; border-radius:50%; background:#0a0420; }
+#bombBtn svg { position:relative; width:48px; height:48px; opacity:.4; transition:opacity .2s; }
+#bombBtn.ready { animation:bombPulse 1s infinite; }
+#bombBtn.ready svg { opacity:1; }
+@keyframes bombPulse { 50% { box-shadow:0 0 28px rgba(255,159,26,1); transform:scale(1.07); } }
 label { display:flex; flex-direction:column; gap:8px; color:var(--cyan); font-weight:700; letter-spacing:3px; }
 input[type=range] { width:250px; accent-color:var(--magenta); touch-action:pan-x; }
 #install { position:fixed; left:10px; right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); display:flex; gap:10px;
@@ -49,7 +59,8 @@ kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:
 <body>
 <canvas id="c"></canvas>
 <button id="pauseBtn" class="hidden" aria-label="Pause">❚❚</button>
-<button id="muteBtn" class="hidden" aria-label="Mute">🔊</button>
+<button id="muteBtn" class="hidden" aria-label="Mute"></button>
+<button id="bombBtn" class="hidden" aria-label="Bomb"><svg viewBox="0 0 100 100" aria-hidden="true"><polygon points="50.0,2.0 58.0,25.3 74.7,16.0 71.0,34.7 84.2,38.9 76.0,50.0 95.7,64.8 71.0,65.3 74.7,84.0 58.0,74.7 50.0,86.0 42.0,74.7 21.8,88.8 29.0,65.3 10.1,63.0 24.0,50.0 15.8,38.9 29.0,34.7 21.8,11.2 42.0,25.3" fill="#ff9f1a" stroke="#ff4d00" stroke-width="3" stroke-linejoin="round"/><polygon points="50.0,20.0 54.6,35.7 65.9,28.2 62.1,41.2 72.8,42.6 65.0,50.0 78.5,59.3 62.1,58.8 65.9,71.8 54.6,64.3 50.0,74.0 45.4,64.3 32.4,74.3 37.9,58.8 24.3,58.3 35.0,50.0 27.2,42.6 37.9,41.2 32.4,25.7 45.4,35.7" fill="#ffe14d"/><circle cx="50" cy="50" r="7" fill="#fff"/></svg></button>
 
 <!-- Install message (shown only when the browser says the app can be installed) -->
 <div id="install" class="hidden">
@@ -72,9 +83,10 @@ kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:
 <!-- How to play -->
 <div id="help" class="screen hidden">
   <h2>HOW TO PLAY</h2>
-  <p><b>Desktop:</b> move with <kbd>arrows</kbd> or <kbd>WASD</kbd> (<kbd>ZQSD</kbd> on AZERTY), hold <kbd>Space</kbd> to fire if auto-fire is off, <kbd>P</kbd> to pause, <kbd>M</kbd> to mute.</p>
-  <p><b>Mobile:</b> drag your finger, the ship follows and fires automatically.</p>
+  <p><b>Desktop:</b> move with <kbd>arrows</kbd> or <kbd>WASD</kbd> (<kbd>ZQSD</kbd> on AZERTY), hold <kbd>Space</kbd> to fire if auto-fire is off, <kbd>P</kbd> to pause, <kbd>M</kbd> to mute, <kbd>B</kbd> to use a bomb.</p>
+  <p><b>Mobile:</b> drag your finger, the ship follows and fires automatically. Tap the glowing circle (bottom right) when it is full to use the bomb.</p>
   <p><b style="color:#00f0ff">S</b> Shield &nbsp; <b style="color:#ffe14d">M</b> Double / triple shot &nbsp; <b style="color:#4dff88">+</b> Heal</p>
+  <p>Destroy aliens to charge the bomb circle. When it is full, use the bomb to clear the screen (one bomb per charge).</p>
   <p>Drones fall, snipers shoot, kamikazes chase you, and a boss arrives every 40 seconds.</p>
   <button id="helpBackBtn">BACK</button>
 </div>
@@ -112,7 +124,8 @@ kbd { border:1px solid var(--violet); border-radius:4px; padding:1px 6px; color:
    ===================================================================== */
 const CFG = {
   player:   { speed:420, hp:3, maxHp:5, size:18, fireDelay:0.16, bulletSpeed:760, invulnTime:1.2, followRate:14 },
-  powerups: { dropChance:0.10, fallSpeed:90, size:14, shieldTime:6, multiTime:9 },
+  powerups: { dropChance:0.12, fallSpeed:90, size:14, shieldTime:10, multiTime:15 },
+  bomb:     { killsToCharge:15, bossCharge:8, bossDamage:12, waveSpeed:1400 },   // kills needed to fill the bomb (only one can be stored)
   spawn:    { baseDelay:1.1, stepPerLevel:0.07, minDelay:0.3 },   // seconds between spawns
   difficulty: { scorePerLevel:300, speedPerLevel:0.06, maxSpeedMul:2.2 },
   enemies: {
@@ -180,11 +193,21 @@ const Sound = (() => {
   function load() { try { return JSON.parse(localStorage.getItem('neonvoid.audio')) || {}; } catch (e) { return {}; } }
   function save() { try { localStorage.setItem('neonvoid.audio', JSON.stringify(cfg)); } catch (e) {} }
 
+  // Safari / iOS: the context starts "suspended" (or becomes "interrupted" after a call or app switch).
+  // It must be resumed from inside a user gesture, so init() is called on every tap.
+  function unlock() {
+    if (ac.state !== 'running') ac.resume();
+    const s = ac.createBufferSource();                       // silent blip finishes the unlock on iOS
+    s.buffer = ac.createBuffer(1, 1, 22050); s.connect(ac.destination); s.start(0);
+  }
+
   // Must be called from a user gesture (browsers block audio until then)
   function init() {
-    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    if (ac) { unlock(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    // iOS: "playback" lets sound play even when the silent (ringer) switch is on
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
     ac = new AC();
     sfxBus = ac.createGain(); musicBus = ac.createGain();
     sfxBus.connect(ac.destination); musicBus.connect(ac.destination);
@@ -192,6 +215,7 @@ const Sound = (() => {
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     apply();
+    unlock();
   }
   function apply() {                                        // volumes + mute
     if (!ac) return;
@@ -229,6 +253,8 @@ const Sound = (() => {
     shield:  () => { tone('sine', 300, 1000, 0.4, 0.2); noise(0.4, 0.12, 500, 4000, 0, 'bandpass'); },
     multi:   () => [523, 659, 784, 1047].forEach((f, i) => tone('triangle', f, f, 0.12, 0.2, i * 0.06)),
     heal:    () => { tone('sine', 880, 880, 0.5, 0.18); tone('sine', 1319, 1319, 0.6, 0.15, 0.12); },
+    bomb:    () => { tone('square', 200, 500, 0.15, 0.15); tone('square', 400, 800, 0.2, 0.12, 0.1); },   // bomb fully charged
+    nuke:    () => { noise(1.2, 0.8, 3000, 60); tone('sine', 200, 25, 1.1, 0.6); tone('sawtooth', 600, 40, 0.8, 0.15); },   // explosion
     levelUp: () => [440, 554, 659, 880].forEach((f, i) => tone('square', f, f, 0.1, 0.08, i * 0.07)),
     boss:    () => [0, 0.35, 0.7].forEach(d => tone('sawtooth', 380, 760, 0.33, 0.12, d)),   // siren
     alarm:   () => tone('sine', 880, 880, 0.12, 0.15),                                       // 1 HP left
@@ -288,7 +314,8 @@ let score = 0, best = loadBest(), time = 0, level = 1;
 let spawnTimer = 0, bossTimer = 0, shake = 0, banner = { text: '', t: 0 };
 let announced = {}, lastLevel = 1, lowHpTimer = 0;
 
-const player = { x: 0, y: 0, r: 18, hp: 3, shield: 0, weapon: 1, weaponTime: 0, inv: 0, fireTimer: 0 };
+const player = { x: 0, y: 0, r: 18, hp: 3, shield: 0, weapon: 1, weaponTime: 0, inv: 0, fireTimer: 0, charge: 0 };       // charge = enemies destroyed since the last bomb
+const wave = { on: false, r: 0, x: 0, y: 0 };      // bomb shockwave animation
 let enemies = [], bullets = [], enemyBullets = [], bonuses = [];
 
 /* Particle pool: allocated once, reused forever (no garbage) */
@@ -315,6 +342,7 @@ addEventListener('keydown', e => {
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyB') useBomb();
   if (e.code === 'Enter' && (state === 'menu' || state === 'over')) startGame();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -333,6 +361,7 @@ function showScreen(id) {
   ['menu', 'help', 'audio', 'pause', 'over'].forEach(s => $(s).classList.toggle('hidden', s !== id));
   $('pauseBtn').classList.toggle('hidden', state !== 'play');
   $('muteBtn').classList.toggle('hidden', state !== 'play');
+  $('bombBtn').classList.toggle('hidden', state !== 'play');
   $('menuBest').textContent = best;
 }
 function goMenu() { state = 'menu'; Sound.stopMusic(); showScreen('menu'); }
@@ -362,11 +391,14 @@ click('resumeBtn', togglePause);
 click('quitBtn', goMenu);
 click('overMenuBtn', goMenu);
 
-// Audio settings
+// Audio settings (speaker icons are inline SVG, so they look the same on every device)
+const SVG_ATTR = 'viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+const ICON_SOUND_ON = '<svg ' + SVG_ATTR + '><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+const ICON_SOUND_OFF = '<svg ' + SVG_ATTR + '><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
 function toggleMute() { Sound.cfg.mute = !Sound.cfg.mute; Sound.save(); Sound.apply(); updateAudioUI(); }
 function updateAudioUI() {
   const m = Sound.cfg.mute;
-  $('muteBtn').textContent = m ? '🔇' : '🔊';
+  $('muteBtn').innerHTML = m ? ICON_SOUND_OFF : ICON_SOUND_ON;
   $('muteToggleBtn').textContent = 'SOUND: ' + (m ? 'OFF' : 'ON');
   $('musicVol').value = Sound.cfg.music * 100; $('sfxVol').value = Sound.cfg.sfx * 100;
 }
@@ -378,13 +410,25 @@ $('musicVol').oninput = e => { Sound.cfg.music = e.target.value / 100; Sound.sav
 $('sfxVol').oninput = e => { Sound.cfg.sfx = e.target.value / 100; Sound.save(); Sound.apply(); };
 $('sfxVol').onchange = () => Sound.play('explode', 1);                      // effect preview
 
+// Bomb button (pointerdown = instant response on touch screens)
+let shownPct = -1;
+function updateBombUI() {                                  // fills the circle, makes it glow when ready
+  const pct = Math.round(Math.min(1, player.charge / CFG.bomb.killsToCharge) * 100);
+  if (pct === shownPct) return;
+  shownPct = pct;
+  $('bombBtn').style.setProperty('--p', pct + '%');
+  $('bombBtn').classList.toggle('ready', pct >= 100);
+}
+$('bombBtn').addEventListener('pointerdown', e => { e.preventDefault(); useBomb(); });
+
 /* =====================================================================
    6. ENTITIES
    ===================================================================== */
 function startGame() {
   enemies = []; bullets = []; enemyBullets = []; bonuses = [];
   particles.forEach(p => p.on = false);
-  Object.assign(player, { x: W / 2, y: H * 0.8, hp: CFG.player.hp, shield: 0, weapon: 1, weaponTime: 0, inv: 1.5, fireTimer: 0 });
+  Object.assign(player, { x: W / 2, y: H * 0.8, hp: CFG.player.hp, shield: 0, weapon: 1, weaponTime: 0, inv: 1.5, fireTimer: 0, charge: 0 });
+  wave.on = false;
   score = 0; time = 0; level = 1; spawnTimer = 1; announced = {};
   bossTimer = CFG.enemies.boss.every; pointer = null;
   state = 'play'; showScreen(null);
@@ -542,10 +586,38 @@ function killEnemy(e) {
   const c = CFG.enemies[e.type];
   score += c.score;
   Sound.play('explode', e.type === 'boss' ? 2 : e.type === 'drone' ? 0 : 1);
+  addCharge(e.type === 'boss' ? CFG.bomb.bossCharge : 1);
   burst(e.x, e.y, c.color, e.type === 'boss' ? 80 : 18, e.type === 'boss' ? 400 : 220);
   burst(e.x, e.y, '#ffffff', e.type === 'boss' ? 20 : 5);
   shake = Math.max(shake, e.type === 'boss' ? 14 : CFG.fx.shakeOnKill);
   spawnBonus(e.x, e.y, e.type === 'boss');                 // boss always drops a bonus
+}
+
+/* Bomb charge: fills with every enemy destroyed; only ONE bomb can be stored */
+let bombing = false;                                       // true while a bomb is exploding (its kills give no charge)
+const bombReady = () => player.charge >= CFG.bomb.killsToCharge;
+function addCharge(n) {
+  if (bombing || bombReady()) return;
+  player.charge = Math.min(CFG.bomb.killsToCharge, player.charge + n);
+  if (bombReady()) { Sound.play('bomb'); setBanner('BOMB READY'); }
+}
+
+/* Bomb: wipes enemy bullets, destroys normal enemies, heavily damages bosses */
+function useBomb() {
+  if (state !== 'play' || !bombReady()) return;
+  player.charge = 0; bombing = true;
+  wave.on = true; wave.r = 0; wave.x = player.x; wave.y = player.y;
+  for (const b of enemyBullets) { b.dead = true; burst(b.x, b.y, '#ff9f1a', 2, 100); }
+  for (const e of enemies) {
+    if (e.dead) continue;
+    if (e.type === 'boss') {
+      e.hp -= CFG.bomb.bossDamage; burst(e.x, e.y, '#ff9f1a', 30, 300);
+      if (e.hp <= 0) killEnemy(e);
+    } else killEnemy(e);
+  }
+  bombing = false;
+  player.inv = Math.max(player.inv, 0.8);
+  shake = 18; Sound.play('nuke');
 }
 
 function applyBonus(b) {
@@ -597,10 +669,12 @@ function updateWorld(dt) {
   shake *= Math.pow(0.85, dt * 60);
   if (shake < 0.2) shake = 0;
   banner.t = Math.max(0, banner.t - dt);
+  if (wave.on) { wave.r += CFG.bomb.waveSpeed * S * dt; if (wave.r > Math.hypot(W, H)) wave.on = false; }
 }
 
 function updateGame(dt) {
   time += dt;
+  updateBombUI();
   level = 1 + Math.floor(score / CFG.difficulty.scorePerLevel);
   if (level > lastLevel) { lastLevel = level; Sound.play('levelUp'); setBanner('LEVEL ' + level); }
   Sound.setIntensity(Math.min(2, (level - 1) >> 1), enemies.some(e => e.type === 'boss'));   // music reacts to the game
@@ -677,11 +751,32 @@ function drawPlayer() {
   }
 }
 
+/* Lives: neon hearts. Filled = HP left, dim outline = empty slot (you can heal back up to maxHp) */
+function heartPath(cx, cy, k) {
+  ctx.beginPath(); ctx.moveTo(cx, cy + k * 0.9);
+  ctx.bezierCurveTo(cx - k * 1.6, cy - k * 0.1, cx - k * 0.9, cy - k * 1.2, cx, cy - k * 0.4);
+  ctx.bezierCurveTo(cx + k * 0.9, cy - k * 1.2, cx + k * 1.6, cy - k * 0.1, cx, cy + k * 0.9);
+  ctx.closePath();
+}
+function drawLives(x, y) {
+  const low = player.hp === 1;
+  ctx.save(); ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  for (let i = 0; i < CFG.player.maxHp; i++) {
+    const on = i < player.hp, color = !on ? '#ffffff' : low ? '#ff4d6d' : '#ff2bd6';
+    ctx.globalAlpha = !on ? 0.25 : low ? 0.65 + 0.35 * Math.sin(time * 9) : 1;   // pulses when 1 HP is left
+    ctx.shadowColor = color; ctx.shadowBlur = on ? 12 : 0;
+    ctx.strokeStyle = color; ctx.fillStyle = on ? color + '55' : 'transparent';
+    heartPath(x + 12 + i * 26, y + 12, 8);
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawHUD() {
   ctx.save(); ctx.shadowBlur = 0; ctx.textBaseline = 'top';
   ctx.font = '700 22px "Trebuchet MS", sans-serif'; ctx.textAlign = 'left';
   ctx.fillStyle = '#00f0ff'; ctx.fillText('SCORE ' + score, 14, 12);
-  ctx.fillStyle = '#ff2bd6'; ctx.font = '700 20px sans-serif'; ctx.fillText('♥'.repeat(Math.max(0, player.hp)), 14, 40);
+  drawLives(14, 40);
   ctx.font = '700 14px "Trebuchet MS", sans-serif'; ctx.fillStyle = '#c9b8ff';
   let y = 68;
   if (player.shield > 0) { ctx.fillText('SHIELD ' + player.shield.toFixed(1) + 's', 14, y); y += 18; }
@@ -719,6 +814,11 @@ function render() {
     ctx.shadowBlur = 0;
     if (state !== 'over') drawPlayer();
   }
+  if (wave.on) {                                           // bomb shockwave ring
+    ctx.save(); ctx.strokeStyle = '#ff9f1a'; ctx.shadowColor = '#ff9f1a'; ctx.shadowBlur = 24;
+    ctx.globalAlpha = Math.max(0, 1 - wave.r / Math.hypot(W, H)); ctx.lineWidth = 8 * S;
+    ctx.beginPath(); ctx.arc(wave.x, wave.y, wave.r, 0, 6.283); ctx.stroke(); ctx.restore();
+  }
   // Particles (additive blending = glowing explosions)
   ctx.globalCompositeOperation = 'lighter';
   for (const p of particles) {
@@ -751,6 +851,9 @@ resize();
 setupServiceWorker();
 showScreen('menu');
 updateAudioUI();
+updateBombUI();
+// iOS only accepts touchend / click as audio-unlocking gestures; re-check on every tap
+['touchend', 'pointerdown', 'keydown'].forEach(ev => addEventListener(ev, () => Sound.init(), { passive: true }));
 requestAnimationFrame(loop);
 </script>
 </body>
